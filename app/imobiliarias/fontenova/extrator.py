@@ -65,6 +65,7 @@ _NORMALIZACOES_TAXA = [
     (lambda t: 'REFORMA' in t and 'FRENTE' in t,                                             'FACHADA - SERVIÇOS DE REPAROS'),
     (lambda t: 'SERVIÇOS' in t and 'FACHADA' in t,                                           'FACHADA - SERVIÇOS DE REPAROS'),
     (lambda t: 'IMPERMEABILI' in t,                                                           'IMPERMEABILIZACAO'),
+    (lambda t: 'MONITORAMENTO' in t,                                                           'MONITORAMENTO'),
     (lambda t: 'PINTURA' in t and 'FUNDO' not in t and 'FACHADA' not in t,                   'PINTURA'),
     (lambda t: 'RESCIS' in t and 'FUNC' in t,                                                 'RECISAO FUNCIONARIO'),
 ]

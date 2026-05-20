@@ -31,7 +31,6 @@ from app.utils.tunel import iniciar_tunel
 URL = env("URL_IMOBILIAR")
 
 _TAXAS_IGNORADAS = frozenset(['seguro conteudo', 'boleto registrado', 'porte'])
-#_SUBSTITUICAO_COD_TAXA = {282: 260}
 _DESCONTOS_ESPECIFICOS = {
     'DESCONTO - SINDICA.':   40,
     'DESCONTO - PAGTO PPCI': 750,
@@ -69,7 +68,19 @@ def lancar_taxas_imobiliar(cnpj: str):
 
     try:
         processo_tunel, url_publica = iniciar_tunel()
-        sleep(5)
+
+        # Aguarda o túnel estabilizar e valida antes de continuar
+        sleep(10)
+        for tentativa in range(5):
+            try:
+                r = requests.get(url_publica, timeout=5)
+                logger.sucesso("Túnel", f"Túnel ativo: {url_publica}")
+                break
+            except Exception:
+                logger.alerta("Túnel", f"Túnel ainda não disponível, tentativa {tentativa + 1}/5...")
+                sleep(5)
+        else:
+            raise Exception("Túnel Cloudflare não ficou disponível após 5 tentativas.")
 
         # 1. Leitura do inbox
         resp = requests.get("http://localhost:5001/email/inbox/boletos@creditoreal.com.br/read")
@@ -87,12 +98,12 @@ def lancar_taxas_imobiliar(cnpj: str):
         processar_pdfs(pasta_origem, cfg.PASTA_PDFS, logger)
 
         # 3. DE-PARA
-        boletos     = registrar_relacao_de_para(cnpj, logger)
-        
+        boletos = registrar_relacao_de_para(cnpj, logger)
+
         if not boletos:
             logger.alerta("Lançamento", "Nenhum boleto para lançar.")
             return
-        
+
         # 4. Login no Imobiliar
         login = requests.post(URL, json={
             "Header": {"Action": "LOGIN"},
@@ -122,7 +133,7 @@ def lancar_taxas_imobiliar(cnpj: str):
             WHERE a.cnpj = %s
         """, (cnpj,))
         tabela_taxas = cursor.fetchall()
-        
+
         cursor.execute(
             "SELECT id FROM taxa_120_administradoras WHERE cnpj = %s", (cnpj,)
         )
@@ -137,17 +148,12 @@ def lancar_taxas_imobiliar(cnpj: str):
                     "Lançamento",
                     f"Competência não encontrada no boleto {boleto.nome_boleto}. Pulando."
                 )
-                
-                logger.sucesso(
-                    "Competência",
-                     f"{boleto.nome_boleto} | vencimento: {boleto.vencimento} | competência: {competencia}"
-                )
                 continue
 
             _processar_boleto(boleto, cursor, tabela_taxas, session_id,
-                          competencia, url_publica, logger, relatorio, id_administradora)
+                              competencia, url_publica, logger, relatorio, id_administradora)
 
-        # Logout
+        # 5. Logout
         logout = requests.post(URL, json={
             "Header": {"SessionId": session_id, "Action": "LOGOUT"}, "Body": {}
         }).json()
@@ -160,11 +166,10 @@ def lancar_taxas_imobiliar(cnpj: str):
         conn.close()
 
         logger.sucesso("Lançamento", f"Fluxo finalizado com sucesso às {datetime.now()}")
-        
+
         arquivo_operacional = f"relatorio_taxa120_{datetime.now().strftime('%Y%m%d')}.xlsx"
         relatorio.gerar_excel(arquivo_operacional)
         enviarEmailRelatorio(cfg.NOME, arquivo_operacional)
-
 
     finally:
         if processo_tunel:
@@ -192,9 +197,8 @@ def _processar_boleto(boleto, cursor, tabela_taxas, session_id,
     cod_imovel = int(row[0]) if row else 0
 
     if cod_imovel == 0:
-        msg     = f"Imóvel não mapeado para {boleto.nome_boleto}. Pulando."
         msg_nova = f"Necessário lançamento manual: não identificado o código de imóvel para {boleto.nome_boleto}."
-        logger.alerta("Lançamento", msg)
+        logger.alerta("Lançamento", f"Imóvel não mapeado para {boleto.nome_boleto}. Pulando.")
         relatorio.registrar(
             cod_imovel="NÃO MAPEADO",
             numero_taxa="",
@@ -211,9 +215,8 @@ def _processar_boleto(boleto, cursor, tabela_taxas, session_id,
     )
 
     if not taxas_boleto or taxas_boleto[0].get("taxa", "").lower() != 'condominio':
-        msg      = f"{boleto.nome_boleto} sem taxa de condomínio. Revisão manual."
         msg_nova = f"Revisão manual: não foi encontrada taxa de condomínio para {boleto.nome_boleto}."
-        logger.alerta("Lançamento", msg)
+        logger.alerta("Lançamento", f"{boleto.nome_boleto} sem taxa de condomínio. Revisão manual.")
         relatorio.registrar(
             cod_imovel=cod_imovel,
             numero_taxa="",
@@ -223,59 +226,46 @@ def _processar_boleto(boleto, cursor, tabela_taxas, session_id,
             mensagem=msg_nova,
         )
         return
+
     valor_total = normalizar_valor_monetario(boleto.valor_total)
     taxas_boleto[0]["valor"] = valor_total
     nomes = [t.get("taxa", "").lower() for t in taxas_boleto]
 
     if any("multa" in n for n in nomes):
-        msg      = f"{boleto.nome_boleto} contém multa. Revisão manual."
-        msg_nova = f"Revisão manual: encontrada multa em {boleto.nome_boleto}."
-        logger.alerta("Lançamento", msg)
+        logger.alerta("Lançamento", f"{boleto.nome_boleto} contém multa. Revisão manual.")
         relatorio.registrar(
             cod_imovel=cod_imovel,
             numero_taxa="",
             descricao_taxa="Multa",
             valor="",
             status="Alerta",
-            mensagem=msg_nova,
+            mensagem=f"Revisão manual: encontrada multa em {boleto.nome_boleto}.",
         )
         return
 
     if any("laudo pericial" in n for n in nomes):
-        msg      = f"{boleto.nome_boleto} contém LAUDO - PERICIAL. Revisão manual."
-        msg_nova = f"Revisão manual: encontrado laudo pericial em {boleto.nome_boleto}."
-        logger.alerta("Lançamento", msg)
+        logger.alerta("Lançamento", f"{boleto.nome_boleto} contém LAUDO - PERICIAL. Revisão manual.")
         relatorio.registrar(
             cod_imovel=cod_imovel,
             numero_taxa="",
             descricao_taxa="LAUDO - PERICIAL",
             valor="",
             status="Alerta",
-            mensagem=msg_nova,
+            mensagem=f"Revisão manual: encontrado laudo pericial em {boleto.nome_boleto}.",
         )
         return
 
     if any("desconto" in n for n in nomes):
-        descontos = [
-            t for t in taxas_boleto
-            if "desconto" in t.get("taxa", "").lower()
-        ]
-
-        for desc in descontos:
-            msg = f"{boleto.nome_boleto} contém taxa de desconto. Revisão manual."
-            msg_nova = f"Revisão manual: encontrado desconto em {boleto.nome_boleto}."
-
-            logger.alerta("Lançamento", msg)
-
+        for desc in [t for t in taxas_boleto if "desconto" in t.get("taxa", "").lower()]:
+            logger.alerta("Lançamento", f"{boleto.nome_boleto} contém taxa de desconto. Revisão manual.")
             relatorio.registrar(
                 cod_imovel=cod_imovel,
                 numero_taxa="",
                 descricao_taxa=desc.get("taxa", ""),
                 valor=desc.get("valor", ""),
                 status="Alerta",
-                mensagem=msg_nova,
+                mensagem=f"Revisão manual: encontrado desconto em {boleto.nome_boleto}.",
             )
-
         return
 
     # Consulta contrato do imóvel
@@ -285,10 +275,10 @@ def _processar_boleto(boleto, cursor, tabela_taxas, session_id,
     }).json()
 
     if not (resp_contrato['Header']['Status'] == 'Success' and not resp_contrato['Header']['Error']):
-        msg = f"Contrato não encontrado para o imóvel {cod_imovel}."
+        msg = f"Contrato não encontrado para o imóvel {cod_imovel}, boleto: {boleto.nome_boleto}."
         logger.erro("Lançamento", msg)
         relatorio.registrar(
-            cod_imovel=cod_imovel,
+            cod_imovel= cod_imovel,
             numero_taxa="",
             descricao_taxa="",
             valor="",
@@ -309,21 +299,11 @@ def _processar_boleto(boleto, cursor, tabela_taxas, session_id,
         mensagem="Contrato localizado",
     )
 
-    # Consulta previsões existentes
-    resp_prev = requests.post(URL, json={
-        "Header": {"SessionId": session_id, "Action": "LOCACAO_LANCTO_COND_CONSULTAR"},
-        "Body":   {"CodImovel": cod_imovel, "Competencia": competencia,
-                   "CodContratoLoc": cod_contrato}
-    }).json()
-    lista_prev = resp_prev['Body'].get('Lista', [])
-    
-    #print("\n=== LISTA DE PREVISTOS ===")
-    #print(lista_prev)
-
-    cod_taxas_processadas = {}
+    # -----------------------------------------------------------------------
+    # PASSO 1: Lança todas as taxas do boleto
+    # -----------------------------------------------------------------------
     for taxa in taxas_boleto:
         nome_taxa = taxa.get('taxa', '').lower()
-        
 
         if nome_taxa in _TAXAS_IGNORADAS:
             logger.sucesso("Lançamento", f"Taxa '{taxa.get('taxa')}' ignorada por regra de negócio.")
@@ -340,94 +320,84 @@ def _processar_boleto(boleto, cursor, tabela_taxas, session_id,
         taxa["valor"] = float(
             str(taxa["valor"]).replace(".", "").replace(",", ".").replace("R$ ", "")
         )
- 
+
         cod_taxa = next(
-                (str(db[0]) for db in tabela_taxas if db[1].strip() == taxa.get("taxa", "").strip()),
-                None
-            )
+            (str(db[0]) for db in tabela_taxas if db[1].strip() == taxa.get("taxa", "").strip()),
+            None
+        )
         if not cod_taxa:
-                msg      = f"Taxa '{taxa.get('taxa')}' não encontrada na tabela."
-                msg_nova = f"Taxa '{taxa.get('taxa')}' não encontrada no banco de dados. Informe ao setor de TI."
-                logger.erro("Lançamento", msg)
-                relatorio.registrar(
-                    cod_imovel=cod_imovel,
-                    numero_taxa="",
-                    descricao_taxa=taxa.get("taxa", ""),
-                    valor=taxa["valor"],
-                    status="Erro",
-                    mensagem=msg_nova,
-                )
-                continue
-
-        #cod_int = int(cod_taxa)
-        # if cod_int in cod_taxas_processadas:
-        #     cod_taxas_processadas[cod_int] += taxa['valor']
-        #     msg_nova = f"Localizada taxa igual: somando valor à taxa {cod_taxa}."
-        #     logger.sucesso("Lançamento", f"Somando valor à taxa {cod_taxa}.")
-        #     relatorio.registrar(
-        #         cod_imovel=cod_imovel,
-        #         numero_taxa=cod_taxa,
-        #         descricao_taxa=taxa.get("taxa", ""),
-        #         valor=taxa['valor'],
-        #         status="Sucesso",
-        #         mensagem=msg_nova,
-        #     )
-        #     continue
-
-        #cod_taxas_processadas[cod_int] = taxa['valor']
-
-        #cod_lancamento = str(_SUBSTITUICAO_COD_TAXA.get(cod_int, cod_int))
-        prop_loc       = "L" if int(cod_taxa) <= 499 else "P"
-        valor          = cod_taxas_processadas[cod_taxa]
-
-        processada =  _incluir_lancamento(
-                session_id, cod_imovel, cod_contrato,
-                competencia, tipo_boleto, taxa, valor, boleto, prop_loc, logger, relatorio
+            msg_nova = f"Taxa '{taxa.get('taxa')}' não encontrada no banco de dados. Informe ao setor de TI."
+            logger.erro("Lançamento", f"Taxa '{taxa.get('taxa')}' não encontrada na tabela.")
+            relatorio.registrar(
+                cod_imovel=cod_imovel,
+                numero_taxa="",
+                descricao_taxa=taxa.get("taxa", ""),
+                valor=taxa["valor"],
+                status="Erro",
+                mensagem=msg_nova,
             )
+            continue
 
-        if not processada:
-             _excluir_previsao(
-                session_id, lista_prev, resp_prev,
-                cod_imovel, cod_contrato, competencia, tipo_boleto,
-                taxa, valor, data_vig_inicial, boleto, prop_loc, logger, relatorio
-             )
-           
+        prop_loc = "L" if int(cod_taxa) <= 499 else "P"
+        valor    = taxa["valor"]
 
-        cod_taxas_processadas[cod_taxa] = 0
+        _incluir_lancamento(
+            session_id, cod_taxa, cod_imovel, cod_contrato,
+            competencia, tipo_boleto, taxa, valor, boleto, prop_loc, logger, relatorio
+        )
 
+    # -----------------------------------------------------------------------
+    # PASSO 2: Consulta previstos APÓS lançar tudo e exclui os que sobraram
+    # -----------------------------------------------------------------------
+    resp_prev = requests.post(URL, json={
+        "Header": {"SessionId": session_id, "Action": "LOCACAO_LANCTO_COND_CONSULTAR"},
+        "Body":   {"CodImovel": cod_imovel, "Competencia": competencia,
+                   "CodContratoLoc": cod_contrato}
+    }).json()
+    lista_prev = resp_prev['Body'].get('Lista', [])
+
+    _excluir_previstos(
+        session_id, lista_prev, resp_prev,
+        cod_imovel, cod_contrato, competencia, tipo_boleto,
+        boleto, logger
+    )
+
+    # -----------------------------------------------------------------------
+    # PASSO 3: Associa a imagem do boleto ao lançamento
+    # -----------------------------------------------------------------------
     _associar_imagem(session_id, cod_imovel, competencia, url_publica, boleto, logger, relatorio)
 
 
 # ---------------------------------------------------------------------------
 # Funções de lançamento
 # ---------------------------------------------------------------------------
-def _excluir_previsao(session_id, lista, resp_prev, cod_taxa, cod_imovel,
-                      cod_contrato, competencia, tipo_boleto, taxa, valor,
-                      data_vig, boleto, prop_loc, logger, relatorio) -> bool:
-    for item in lista:
-        if item['PrevisaoReal'] == 'P':
-            resp = requests.post(URL, json={
-                "Header": {"SessionId": session_id, "Action": "LOCACAO_LANCTO_COND_EXCLUIR"},
-                "Body": {
-                    "NumeroLancto":               resp_prev['Body']['NumeroLancto'],
-                    "NumeroLanctoItem":            item['NumeroLanctoItem'],
-                    "CodImovel": cod_imovel, 
-                    "Competencia": competencia,
-                    "CodContratoLoc": cod_contrato,
-                    "TipoBoleto": tipo_boleto,
-                    "DataVencimento": boleto.vencimento
-                }
-            }).json()
-            print("\n=== RESPOSTA EXCLUIR PREVISÃO ===")
-            print(resp)
-            if resp['Header']['Status'] == 'Success' and not resp['Header']['Error']:
-                msg      = f"Imóvel {cod_imovel} — a taxa {cod_taxa} foi excluída."
-                logger.sucesso("Exclusão", msg)
-            else:
-                msg = f"Erro ao excluir taxa {cod_taxa}: {_extrair_erro(resp)}"
-                logger.erro("Exclusão", msg)
-            return True
-    return False
+def _excluir_previstos(session_id, lista_prev, resp_prev,
+                       cod_imovel, cod_contrato, competencia,
+                       tipo_boleto, boleto, logger):
+    """Exclui todos os itens que ainda estão como previstos (PrevisaoReal == 'P')."""
+    for item in lista_prev:
+        if item.get('PrevisaoReal') != 'P':
+            continue
+
+        resp = requests.post(URL, json={
+            "Header": {"SessionId": session_id, "Action": "LOCACAO_LANCTO_COND_EXCLUIR"},
+            "Body": {
+                "NumeroLancto":     resp_prev['Body']['NumeroLancto'],
+                "NumeroLanctoItem": item['NumeroLanctoItem'],
+                "CodImovel":        cod_imovel,
+                "Competencia":      competencia,
+                "CodContratoLoc":   cod_contrato,
+                "TipoBoleto":       tipo_boleto,
+                "DataVencimento":   boleto.vencimento,
+            }
+        }).json()
+        print(resp)
+
+        cod_taxa_item = item.get('CodTaxa', item.get('NumeroLanctoItem', '?'))
+        if resp['Header']['Status'] == 'Success' and not resp['Header']['Error']:
+            logger.sucesso("Exclusão", f"Imóvel {cod_imovel} — previsão da taxa {cod_taxa_item} excluída.")
+        else:
+            logger.erro("Exclusão", f"Erro ao excluir previsão da taxa {cod_taxa_item}: {_extrair_erro(resp)}")
 
 
 def _incluir_lancamento(session_id, cod_taxa, cod_imovel, cod_contrato,
@@ -436,42 +406,43 @@ def _incluir_lancamento(session_id, cod_taxa, cod_imovel, cod_contrato,
     resp = requests.post(URL, json={
         "Header": {"SessionId": session_id, "Action": "LOCACAO_LANCTO_COND_INCLUIR"},
         "Body": {
-            "TestaAditivoLocacao": 'N', "LancarContaCorrenteLocacao": 'S',
-            "CompetenciaLocacao": competencia, "TipoBoleto": tipo_boleto,
-            "CodImovel": cod_imovel, "CodContratoLoc": cod_contrato,
-            "Competencia": competencia, "Complemento": boleto.complemento,
-            "CodTaxa": cod_taxa, "CobrarLocatarioProprietario": prop_loc,
-            "TotalParcelas": taxa.get("total_parcelas"),
-            "NumeroParcela": taxa.get("parcela_atual"),
-            "ValorReal": valor, "DataVencimento": boleto.vencimento,
-            "CodBarras": boleto.codigo_barras,
+            "TestaAditivoLocacao":          'N',
+            "LancarContaCorrenteLocacao":   'S',
+            "CompetenciaLocacao":           competencia,
+            "TipoBoleto":                   tipo_boleto,
+            "CodImovel":                    cod_imovel,
+            "CodContratoLoc":               cod_contrato,
+            "Competencia":                  competencia,
+            "Complemento":                  boleto.complemento,
+            "CodTaxa":                      cod_taxa,
+            "CobrarLocatarioProprietario":  prop_loc,
+            "TotalParcelas":                taxa.get("total_parcelas"),
+            "NumeroParcela":                taxa.get("parcela_atual"),
+            "ValorReal":                    valor,
+            "DataVencimento":               boleto.vencimento,
+            "CodBarras":                    boleto.codigo_barras,
         }
     }).json()
-    #print("\n=== RESPOSTA INCLUIR LANÇAMENTO ===")
-    #print(resp)
+
     if resp['Header']['Status'] == 'Success' and not resp['Header']['Error']:
-        msg      = f"Imóvel {cod_imovel} — taxa {cod_taxa} lançada."
-        msg_nova = f"Taxa {cod_taxa} lançada com sucesso."
-        logger.sucesso("Lançamento", msg)
+        logger.sucesso("Lançamento", f"Imóvel {cod_imovel} — taxa {cod_taxa} lançada.")
         relatorio.registrar(
             cod_imovel=cod_imovel,
             numero_taxa=cod_taxa,
             descricao_taxa=taxa.get("taxa", ""),
             valor=valor,
             status="Sucesso",
-            mensagem=msg_nova,
+            mensagem=f"Taxa {cod_taxa} lançada com sucesso.",
         )
     else:
-        msg      = f"Erro ao lançar taxa {cod_taxa}: {_extrair_erro(resp)}"
-        msg_nova = f"{_extrair_erro(resp)}."
-        logger.erro("Lançamento", msg)
+        logger.erro("Lançamento", f"Erro ao lançar taxa {cod_taxa}: {_extrair_erro(resp)}")
         relatorio.registrar(
             cod_imovel=cod_imovel,
             numero_taxa=cod_taxa,
             descricao_taxa=taxa.get("taxa", ""),
             valor=valor,
             status="Erro",
-            mensagem=msg_nova,
+            mensagem=f"{_extrair_erro(resp)}.",
         )
 
 
@@ -486,9 +457,8 @@ def _associar_imagem(session_id, cod_imovel, competencia, url_publica, boleto, l
     num_lancto_120 = next((l["NumeroLancto"] for l in lancamentos if l.get("CodTaxa") == 120), None)
 
     if not num_lancto_120:
-        msg      = f"Imóvel {cod_imovel} sem lançamento de taxa 120. Imagem não associada."
         msg_nova = f"Não foi possível associar imagem ao imóvel {cod_imovel}, confira o e-mail para mais informações."
-        logger.erro("Imagem", msg)
+        logger.erro("Imagem", f"Imóvel {cod_imovel} sem lançamento de taxa 120. Imagem não associada.")
         relatorio.registrar(
             cod_imovel=cod_imovel,
             numero_taxa="",
@@ -503,7 +473,13 @@ def _associar_imagem(session_id, cod_imovel, competencia, url_publica, boleto, l
     nome_url   = quote(boleto.nome_boleto)
     url_imagem = f"{url_publica}/taxa-120/arquivo/{nome_url}"
 
-    if requests.get(url_imagem).status_code != 200:
+    # Valida acesso ao arquivo sem estourar exceção
+    try:
+        acessivel = requests.get(url_imagem, timeout=10).status_code == 200
+    except Exception:
+        acessivel = False
+
+    if not acessivel:
         msg = f"Arquivo não acessível: {boleto.nome_boleto}"
         logger.erro("Imagem", msg)
         relatorio.registrar(
