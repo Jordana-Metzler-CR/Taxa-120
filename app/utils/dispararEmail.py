@@ -72,7 +72,7 @@ def enviarEmailRelatorio(nome_imobiliaria: str, arquivo_operacional: str) -> boo
     )
     try:
         df = pd.read_sql(
-           "SELECT * FROM logs_taxa_120 WHERE data_e_horario::date = CURRENT_DATE;", conn
+           "SELECT * FROM logs_taxa_120 WHERE data_e_horario >= NOW() - INTERVAL '1 hour'", conn
         )
     finally:
         conn.close()

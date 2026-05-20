@@ -1,11 +1,6 @@
 """
 Extração de dados dos PDFs da Barcellos.
-
-O PDF da Barcellos chega em dois formatos:
-  - FATURA: tabela com colunas "Descrição / Valor"
-  - RECIBO: bloco iniciado pela palavra "TAXAS"
-
-A função principal é extrair_boleto(), que detecta o tipo automaticamente.
+...
 """
 
 import re
@@ -40,13 +35,42 @@ def _safe_search(pattern, text, group=0):
 
 
 # ---------------------------------------------------------------------------
+# Normalização de nomes de taxas
+# ---------------------------------------------------------------------------
+_NORMALIZACOES_TAXA = [
+    (lambda t: 'CONDOMINIO' in t or 'CONDOMÍNIO' in t,                                        'CONDOMINIO'),
+    (lambda t: 'GÁS' in t or 'GAS' in t,                                                      'GÁS'),
+    (lambda t: 'ELEVADOR' in t and 'MELHORIAS' not in t and 'REFORMA' not in t,               'MANUTENCAO ELEVADOR'),
+    (lambda t: ('FERIAS' in t or 'SALARIO' in t or 'SAL.' in t) and
+               ('13' in t or 'FUNCIONARIO' in t or 'FUNC' in t),                              'FERIAS/13 SAL'),
+    (lambda t: 'ENERGIA' in t or ('CONSUMO' in t and 'ENERGIA' in t),                         'ENERGIA ELETRICA'),
+    (lambda t: 'COTA' in t and 'ALA' in t,                                                    'CONDOMINIO'),
+    (lambda t: 'PORTARIA' in t,                                                                'PORTARIA'),
+    (lambda t: 'AGUA' in t and 'PURIFICADOR' not in t,                                        'AGUA'),
+    (lambda t: 'FUNDO' in t and 'OBRAS' in t,                                                 'FUNDO OBRAS'),
+    (lambda t: 'FUNDO' in t and any(x in t for x in ('MELHORIAS', 'LAZER', 'JANELA', 'ELETRIC')), 'FUNDO MELHORIAS'),
+    (lambda t: 'OBRA' in t and 'FUNDO' not in t,                                              'OBRAS'),
+    (lambda t: 'FUNDO' in t and 'RESERVA' in t,                                               'PURIFICATTA'),
+    (lambda t: 'PURIFICATTA' in t,                                               'FUNDO RESERVA'),
+    (lambda t: ('LAUDO' in t and 'PREDIAL' in t) or 'PPCI' in t,                              'LAUDO PPCI'),
+    (lambda t: 'REFORMA' in t or 'MELHORIAS' in t and 'ELEVADOR' in t,                        'MELHORIAS ELEVADORES'),
+    (lambda t: ('MANUT' in t and 'CONSERV' in t) or ('FECHO' in t and 'JANELA' in t)
+               or ('FUNDO' in t and 'MANUTEN' in t),                                          'FUNDO MANUTENCAO'),
+]
+
+
+def _normalizar_taxa(taxa: str) -> str:                                 
+    t = taxa.upper()
+    for condicao, nome in _NORMALIZACOES_TAXA:
+        if condicao(t):
+            return nome
+    return taxa.strip()
+
+
+# ---------------------------------------------------------------------------
 # Extração de taxas — FATURA
 # ---------------------------------------------------------------------------
 def _extrair_taxas_fatura(texto):
-    """
-    Percorre as linhas entre o cabeçalho 'Descrição  Valor' e a linha 'TOTAL'.
-    Cada linha contém o nome da taxa e, no final, o valor.
-    """
     linhas     = texto.split('\n')
     taxas      = []
     lendo      = False
@@ -70,9 +94,6 @@ def _extrair_taxas_fatura(texto):
         valor  = ultimo.group(1)
         nome   = linha[:ultimo.start()].strip()
 
-        if 'GAS' in nome.upper():   nome = 'GAS'
-        if 'AGUA M' in nome.upper(): nome = 'AGUA M³'
-
         parcela_atual = total_parcelas = 1
         pm = parcelas_re.search(nome)
         if pm:
@@ -80,8 +101,12 @@ def _extrair_taxas_fatura(texto):
             total_parcelas = int(pm.group(2))
             nome = parcelas_re.sub('', nome).strip()
 
-        taxas.append({'taxa': nome, 'valor': valor,
-                      'parcela_atual': parcela_atual, 'total_parcelas': total_parcelas})
+        taxas.append({
+            'taxa': _normalizar_taxa(nome),                    
+            'valor': valor,
+            'parcela_atual': parcela_atual,
+            'total_parcelas': total_parcelas,
+        })
     return taxas
 
 
@@ -89,10 +114,6 @@ def _extrair_taxas_fatura(texto):
 # Extração de taxas — RECIBO
 # ---------------------------------------------------------------------------
 def _extrair_taxas_recibo(texto):
-    """
-    Lê o bloco entre a linha 'TAXAS' e as linhas 'MENSAGENS' / 'DEMONSTRATIVO'.
-    O bloco é uma sequência de "nome  valor" em texto corrido.
-    """
     linhas      = texto.strip().split('\n')
     texto_taxas = ''
     lendo       = False
@@ -114,8 +135,7 @@ def _extrair_taxas_recibo(texto):
     for nome, valor in re.findall(r'([A-ZÀ-Úa-zà-ú\s/0-9-]+?)\s+(\d+(?:[.,]\d{2}))', texto_taxas):
         nome = nome.strip().replace('FDO', 'FUNDO')
         nome = re.sub(r'\s+', ' ', nome)
-        if 'GAS' in nome.upper():    nome = 'GAS'
-        if 'AGUA M' in nome.upper(): nome = 'AGUA M³'
+
 
         parcela_atual = total_parcelas = 1
         pm = parcelas_re.search(nome)
@@ -124,10 +144,13 @@ def _extrair_taxas_recibo(texto):
             total_parcelas = int(pm.group(2))
             nome = parcelas_re.sub('', nome).strip()
 
-        taxas.append({'taxa': nome, 'valor': valor.replace('.', ','),
-                      'parcela_atual': parcela_atual, 'total_parcelas': total_parcelas})
+        taxas.append({
+            'taxa': _normalizar_taxa(nome),                                   
+            'valor': valor.replace('.', ','),
+            'parcela_atual': parcela_atual,
+            'total_parcelas': total_parcelas,
+        })
     return taxas
-
 
 # ---------------------------------------------------------------------------
 # Função principal

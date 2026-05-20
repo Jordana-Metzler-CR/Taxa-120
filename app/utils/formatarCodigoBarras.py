@@ -18,9 +18,9 @@ def linha_digitavel_para_codigo_barras(linha_digitavel):
 
 def extrai_valor_codigo_barras(codigo_barras):
     
-    print(f"Valor bruto extraído do código de barras: {codigo_barras}")
+    #print(f"Valor bruto extraído do código de barras: {codigo_barras}")
     
-    print(f"Código de barras limpo: {codigo_barras}")
+    #print(f"Código de barras limpo: {codigo_barras}")
     valor_str = codigo_barras[-10:]
     valor = int(valor_str) / 100
     return valor
@@ -30,5 +30,5 @@ def extrai_vencimento(codigo_barras):
     vencimento_str = codigo_barras[-14: -10]
     vencimento_int = int(vencimento_str)
     vencimento_date = data_base + datetime.timedelta(days=vencimento_int)
-    print(f"Vencimento date: {vencimento_date}")
+    #print(f"Vencimento date: {vencimento_date}")
     return vencimento_date.strftime("%d/%m/%Y")

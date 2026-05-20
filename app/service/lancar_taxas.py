@@ -10,6 +10,7 @@ Recebe o CNPJ da imobiliária e executa o fluxo completo:
 """
 
 import os
+import pprint
 import requests
 import psycopg2
 from datetime import datetime
@@ -30,7 +31,7 @@ from app.utils.tunel import iniciar_tunel
 URL = env("URL_IMOBILIAR")
 
 _TAXAS_IGNORADAS = frozenset(['seguro conteudo', 'boleto registrado', 'porte'])
-_SUBSTITUICAO_COD_TAXA = {282: 260}
+#_SUBSTITUICAO_COD_TAXA = {282: 260}
 _DESCONTOS_ESPECIFICOS = {
     'DESCONTO - SINDICA.':   40,
     'DESCONTO - PAGTO PPCI': 750,
@@ -240,7 +241,7 @@ def _processar_boleto(boleto, cursor, tabela_taxas, session_id,
         )
         return
 
-    if any("laudo" in n for n in nomes):
+    if any("laudo pericial" in n for n in nomes):
         msg      = f"{boleto.nome_boleto} contém LAUDO - PERICIAL. Revisão manual."
         msg_nova = f"Revisão manual: encontrado laudo pericial em {boleto.nome_boleto}."
         logger.alerta("Lançamento", msg)
@@ -315,11 +316,14 @@ def _processar_boleto(boleto, cursor, tabela_taxas, session_id,
                    "CodContratoLoc": cod_contrato}
     }).json()
     lista_prev = resp_prev['Body'].get('Lista', [])
+    
+    #print("\n=== LISTA DE PREVISTOS ===")
+    #print(lista_prev)
 
     cod_taxas_processadas = {}
-
     for taxa in taxas_boleto:
         nome_taxa = taxa.get('taxa', '').lower()
+        
 
         if nome_taxa in _TAXAS_IGNORADAS:
             logger.sucesso("Lançamento", f"Taxa '{taxa.get('taxa')}' ignorada por regra de negócio.")
@@ -355,41 +359,41 @@ def _processar_boleto(boleto, cursor, tabela_taxas, session_id,
                 )
                 continue
 
-        cod_int = int(cod_taxa)
-        
-        if cod_int in cod_taxas_processadas:
-            cod_taxas_processadas[cod_int] += taxa['valor']
-            msg_nova = f"Localizada taxa igual: somando valor à taxa {cod_taxa}."
-            logger.sucesso("Lançamento", f"Somando valor à taxa {cod_taxa}.")
-            relatorio.registrar(
-                cod_imovel=cod_imovel,
-                numero_taxa=cod_taxa,
-                descricao_taxa=taxa.get("taxa", ""),
-                valor=taxa['valor'],
-                status="Sucesso",
-                mensagem=msg_nova,
-            )
-            continue
+        #cod_int = int(cod_taxa)
+        # if cod_int in cod_taxas_processadas:
+        #     cod_taxas_processadas[cod_int] += taxa['valor']
+        #     msg_nova = f"Localizada taxa igual: somando valor à taxa {cod_taxa}."
+        #     logger.sucesso("Lançamento", f"Somando valor à taxa {cod_taxa}.")
+        #     relatorio.registrar(
+        #         cod_imovel=cod_imovel,
+        #         numero_taxa=cod_taxa,
+        #         descricao_taxa=taxa.get("taxa", ""),
+        #         valor=taxa['valor'],
+        #         status="Sucesso",
+        #         mensagem=msg_nova,
+        #     )
+        #     continue
 
-        cod_taxas_processadas[cod_int] = taxa['valor']
+        #cod_taxas_processadas[cod_int] = taxa['valor']
 
-        cod_lancamento = str(_SUBSTITUICAO_COD_TAXA.get(cod_int, cod_int))
-        prop_loc       = "L" if cod_int <= 499 else "P"
-        valor          = cod_taxas_processadas[cod_int]
+        #cod_lancamento = str(_SUBSTITUICAO_COD_TAXA.get(cod_int, cod_int))
+        prop_loc       = "L" if int(cod_taxa) <= 499 else "P"
+        valor          = cod_taxas_processadas[cod_taxa]
 
-        processada = _alterar_previsao(
-            session_id, lista_prev, resp_prev, cod_lancamento,
-            cod_imovel, cod_contrato, competencia, tipo_boleto,
-            taxa, valor, data_vig_inicial, boleto, prop_loc, logger, relatorio
-        )
-
-        if not processada:
-            _incluir_lancamento(
-                session_id, cod_lancamento, cod_imovel, cod_contrato,
+        processada =  _incluir_lancamento(
+                session_id, cod_imovel, cod_contrato,
                 competencia, tipo_boleto, taxa, valor, boleto, prop_loc, logger, relatorio
             )
 
-        cod_taxas_processadas[cod_int] = 0
+        if not processada:
+             _excluir_previsao(
+                session_id, lista_prev, resp_prev,
+                cod_imovel, cod_contrato, competencia, tipo_boleto,
+                taxa, valor, data_vig_inicial, boleto, prop_loc, logger, relatorio
+             )
+           
+
+        cod_taxas_processadas[cod_taxa] = 0
 
     _associar_imagem(session_id, cod_imovel, competencia, url_publica, boleto, logger, relatorio)
 
@@ -397,54 +401,31 @@ def _processar_boleto(boleto, cursor, tabela_taxas, session_id,
 # ---------------------------------------------------------------------------
 # Funções de lançamento
 # ---------------------------------------------------------------------------
-def _alterar_previsao(session_id, lista, resp_prev, cod_taxa, cod_imovel,
+def _excluir_previsao(session_id, lista, resp_prev, cod_taxa, cod_imovel,
                       cod_contrato, competencia, tipo_boleto, taxa, valor,
                       data_vig, boleto, prop_loc, logger, relatorio) -> bool:
     for item in lista:
-        if item['PrevisaoReal'] == 'R':
-            continue
-        if int(item['CodTaxa']) == int(cod_taxa) and item['PrevisaoReal'] == 'P':
+        if item['PrevisaoReal'] == 'P':
             resp = requests.post(URL, json={
-                "Header": {"SessionId": session_id, "Action": "LOCACAO_LANCTO_COND_ALTERAR"},
+                "Header": {"SessionId": session_id, "Action": "LOCACAO_LANCTO_COND_EXCLUIR"},
                 "Body": {
                     "NumeroLancto":               resp_prev['Body']['NumeroLancto'],
                     "NumeroLanctoItem":            item['NumeroLanctoItem'],
-                    "QuitouBoletoCondominio":      resp_prev['Body']['QuitouBoletoCondominio'],
-                    "LancarContaCorrenteLocacao":  resp_prev['Body']['LancarContaCorrenteLocacao'],
-                    "CompetenciaLocacao": competencia, "TipoBoleto": tipo_boleto,
-                    "CodImovel": cod_imovel, "CodContratoLoc": cod_contrato,
-                    "Competencia": competencia, "CodTaxa": cod_taxa,
-                    "CobrarLocatarioProprietario": prop_loc,
-                    "TotalParcelas": taxa.get("total_parcelas"),
-                    "NumeroParcela": taxa.get("parcela_atual"),
-                    "ValorPrevisao": item['ValorPrevisao'], "ValorReal": valor,
-                    "DataVencimento": boleto.vencimento, "DataVigInicial": data_vig,
-                    "CodBarras": boleto.codigo_barras,
+                    "CodImovel": cod_imovel, 
+                    "Competencia": competencia,
+                    "CodContratoLoc": cod_contrato,
+                    "TipoBoleto": tipo_boleto,
+                    "DataVencimento": boleto.vencimento
                 }
             }).json()
+            print("\n=== RESPOSTA EXCLUIR PREVISÃO ===")
+            print(resp)
             if resp['Header']['Status'] == 'Success' and not resp['Header']['Error']:
-                msg      = f"Imóvel {cod_imovel} — taxa {cod_taxa} alterada para REAL."
-                msg_nova = f"Taxa {cod_taxa} alterada para REAL."
-                logger.sucesso("Alteração", msg)
-                relatorio.registrar(
-                    cod_imovel=cod_imovel,
-                    numero_taxa=cod_taxa,
-                    descricao_taxa=taxa.get("taxa", ""),
-                    valor=valor,
-                    status="Sucesso",
-                    mensagem=msg_nova,
-                )
+                msg      = f"Imóvel {cod_imovel} — a taxa {cod_taxa} foi excluída."
+                logger.sucesso("Exclusão", msg)
             else:
-                msg = f"Erro ao alterar taxa {cod_taxa}: {_extrair_erro(resp)}"
-                logger.erro("Alteração", msg)
-                relatorio.registrar(
-                    cod_imovel=cod_imovel,
-                    numero_taxa=cod_taxa,
-                    descricao_taxa=taxa.get("taxa", ""),
-                    valor=valor,
-                    status="Erro",
-                    mensagem=msg,
-                )
+                msg = f"Erro ao excluir taxa {cod_taxa}: {_extrair_erro(resp)}"
+                logger.erro("Exclusão", msg)
             return True
     return False
 
@@ -466,6 +447,8 @@ def _incluir_lancamento(session_id, cod_taxa, cod_imovel, cod_contrato,
             "CodBarras": boleto.codigo_barras,
         }
     }).json()
+    #print("\n=== RESPOSTA INCLUIR LANÇAMENTO ===")
+    #print(resp)
     if resp['Header']['Status'] == 'Success' and not resp['Header']['Error']:
         msg      = f"Imóvel {cod_imovel} — taxa {cod_taxa} lançada."
         msg_nova = f"Taxa {cod_taxa} lançada com sucesso."
