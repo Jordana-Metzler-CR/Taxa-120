@@ -31,10 +31,8 @@ from app.utils.tunel import iniciar_tunel
 URL = env("URL_IMOBILIAR")
 
 _TAXAS_IGNORADAS = frozenset(['seguro conteudo', 'boleto registrado', 'porte'])
-_DESCONTOS_ESPECIFICOS = {
-    'DESCONTO - SINDICA.':   40,
-    'DESCONTO - PAGTO PPCI': 750,
-}
+_TAXAS_REVISAO_MANUAL = frozenset(['multa', 'laudo pericial', 'desconto'])
+
 
 
 def _criar_logger():
@@ -231,42 +229,42 @@ def _processar_boleto(boleto, cursor, tabela_taxas, session_id,
     taxas_boleto[0]["valor"] = valor_total
     nomes = [t.get("taxa", "").lower() for t in taxas_boleto]
 
-    if any("multa" in n for n in nomes):
-        logger.alerta("Lançamento", f"{boleto.nome_boleto} contém multa. Revisão manual.")
-        relatorio.registrar(
-            cod_imovel=cod_imovel,
-            numero_taxa="",
-            descricao_taxa="Multa",
-            valor="",
-            status="Alerta",
-            mensagem=f"Revisão manual: encontrada multa em {boleto.nome_boleto}.",
-        )
-        return
+    # if any("multa" in n for n in nomes):
+    #     logger.alerta("Lançamento", f"{boleto.nome_boleto} contém multa. Revisão manual.")
+    #     relatorio.registrar(
+    #         cod_imovel=cod_imovel,
+    #         numero_taxa="",
+    #         descricao_taxa="Multa",
+    #         valor="",
+    #         status="Alerta",
+    #         mensagem=f"Revisão manual: encontrada multa em {boleto.nome_boleto}.",
+    #     )
+    #     return
 
-    if any("laudo pericial" in n for n in nomes):
-        logger.alerta("Lançamento", f"{boleto.nome_boleto} contém LAUDO - PERICIAL. Revisão manual.")
-        relatorio.registrar(
-            cod_imovel=cod_imovel,
-            numero_taxa="",
-            descricao_taxa="LAUDO - PERICIAL",
-            valor="",
-            status="Alerta",
-            mensagem=f"Revisão manual: encontrado laudo pericial em {boleto.nome_boleto}.",
-        )
-        return
+    # if any("laudo pericial" in n for n in nomes):
+    #     logger.alerta("Lançamento", f"{boleto.nome_boleto} contém LAUDO - PERICIAL. Revisão manual.")
+    #     relatorio.registrar(
+    #         cod_imovel=cod_imovel,
+    #         numero_taxa="",
+    #         descricao_taxa="LAUDO - PERICIAL",
+    #         valor="",
+    #         status="Alerta",
+    #         mensagem=f"Revisão manual: encontrado laudo pericial em {boleto.nome_boleto}.",
+    #     )
+    #     return
 
-    if any("desconto" in n for n in nomes):
-        for desc in [t for t in taxas_boleto if "desconto" in t.get("taxa", "").lower()]:
-            logger.alerta("Lançamento", f"{boleto.nome_boleto} contém taxa de desconto. Revisão manual.")
-            relatorio.registrar(
-                cod_imovel=cod_imovel,
-                numero_taxa="",
-                descricao_taxa=desc.get("taxa", ""),
-                valor=desc.get("valor", ""),
-                status="Alerta",
-                mensagem=f"Revisão manual: encontrado desconto em {boleto.nome_boleto}.",
-            )
-        return
+    # if any("desconto" in n for n in nomes):
+    #     for desc in [t for t in taxas_boleto if "desconto" in t.get("taxa", "").lower()]:
+    #         logger.alerta("Lançamento", f"{boleto.nome_boleto} contém taxa de desconto. Revisão manual.")
+    #         relatorio.registrar(
+    #             cod_imovel=cod_imovel,
+    #             numero_taxa="",
+    #             descricao_taxa=desc.get("taxa", ""),
+    #             valor=desc.get("valor", ""),
+    #             status="Alerta",
+    #             mensagem=f"Revisão manual: encontrado desconto em {boleto.nome_boleto}.",
+    #         )
+    #     return
 
     # Consulta contrato do imóvel
     resp_contrato = requests.post(URL, json={
@@ -314,6 +312,18 @@ def _processar_boleto(boleto, cursor, tabela_taxas, session_id,
                 valor=taxa.get("valor", ""),
                 status="Sucesso",
                 mensagem="Taxa não lançada por regra de negócio.",
+            )
+            continue
+        
+        if nome_taxa in _TAXAS_REVISAO_MANUAL:
+            logger.sucesso("Lançamento", f"Encontrada a taxa '{taxa.get('taxa')}' requer lançamento manual.")
+            relatorio.registrar(
+                cod_imovel=cod_imovel,
+                numero_taxa="",
+                descricao_taxa=taxa.get("taxa", ""),
+                valor=taxa.get("valor", ""),
+                status="Sucesso",
+                mensagem=f"Encontrada a taxa '{taxa.get('taxa')}' no boleto {boleto.nome_boleto}: requer lançamento manual.",
             )
             continue
 

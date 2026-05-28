@@ -21,6 +21,8 @@ from pathlib import Path
 
 import pdfplumber
 import pytesseract
+
+from imobiliarias.fontenova.normalizar_taxas import _NORMALIZACOES_TAXA
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 from app.classes.boleto import Boleto
@@ -30,46 +32,6 @@ from app.utils.formatarCodigoBarras import extrai_valor_codigo_barras, extrai_ve
 # ---------------------------------------------------------------------------
 # Normalização de nomes de taxas
 # ---------------------------------------------------------------------------
-_NORMALIZACOES_TAXA = [
-    (lambda t: 'CONDOMINIO' in t or 'CONDOMÍNIO' in t,                                       'CONDOMINIO'),
-    (lambda t: 'GÁS' in t or 'GAS' in t,                                                     'GÁS'),
-    (lambda t: 'DMAE' in t,                                                                   'DMAE'),
-    (lambda t: 'SEG.' in t and 'INCENDIO' in t,                                               'SEGURO INCENDIO'),
-    (lambda t: 'SEGURO' in t,                                                                 'SEGURO INCENDIO'),
-    (lambda t: 'FUNDO' in t and 'OBRAS' in t and 'JANELAS' not in t,                         'FUNDO OBRAS'),
-    (lambda t: 'FUNDO' in t and 'MANUTEN' in t,                                              'FUNDO MANUTENÇAO'),
-    (lambda t: ('FERIAS' in t or 'SALARIO' in t or 'SAL.' in t) and
-               ('13' in t or 'FUNCIONARIO' in t or 'FUNC' in t),                             'FERIAS/13 SAL'),
-    (lambda t: 'REVITALIZ' in t and 'PRED' in t,                                              'REVITALIZACAO'),
-    (lambda t: 'REFORMA' in t and 'FACHADA' in t,                                            'FACHADA - SERVIÇOS DE REPAROS'),
-    (lambda t: 'BOX' in t,                                                                    'BOX'),
-    (lambda t: 'DESCONTO' in t and 'SINDICA' not in t and 'PPCI' not in t,                   'DESCONTO'),
-    (lambda t: 'RESTAURA' in t,                                                               'OBRAS'),
-    (lambda t: 'RECUP' in t and ('SALDO' in t or 'DEVEDOR' in t),                            'RECUPERACAO'),
-    (lambda t: 'REC' in t and ('SALDO' in t or 'DEVEDOR' in t),                              'RECUPERACAO'),
-    (lambda t: 'RECUP' in t and 'PISO' in t,                                                 'OBRAS'),
-    (lambda t: 'REC' in t and 'PISO' in t,                                                   'OBRAS'),
-    (lambda t: 'RECUPERAÇAO' in t and 'FUNDO' in t,                                          'RECUPERACAO'),
-    (lambda t: 'PORTARIA' in t,                                                               'PORTARIA -/ FAXINA'),
-    (lambda t: 'VIGILANCIA' in t,                                                             'VIGILANCIA DE RUA'),
-    (lambda t: 'FUNDO' in t and 'PINTURA' in t,                                              'FUNDO PINTURA'),
-    (lambda t: 'PINTURA' in t and 'FACHADA' in t,                                            'FUNDO PINTURA'),
-    (lambda t: 'SINDICO' in t,                                                                'SINDICO PROFISSIONAL'),
-    (lambda t: 'FUNDO' in t and 'RESERVA' in t,                                              'FUNDO RESERVA'),
-    (lambda t: 'AGUA' in t and 'ESGOTO' in t,                                                'AGUA E ESGOTO'),
-    (lambda t: 'MODER.' in t and 'ELEVADOR' in t,                                            'MELHORIAS ELEVADORES'),
-    (lambda t: 'FUNDO' in t and 'MELHORIAS' in t,                                            'FUNDO MELHORIAS'),
-    (lambda t: 'JANELAS' in t,                                                                'FUNDO MELHORIAS'),
-    (lambda t: 'MELHORIAS' in t,                                                              'FUNDO MELHORIAS'),
-    (lambda t: 'SERVIÇO' in t and 'LIXEIRAS' in t,                                           'OBRAS'),
-    (lambda t: 'REFORMA' in t and 'FRENTE' in t,                                             'FACHADA - SERVIÇOS DE REPAROS'),
-    (lambda t: 'SERVIÇOS' in t and 'FACHADA' in t,                                           'FACHADA - SERVIÇOS DE REPAROS'),
-    (lambda t: 'IMPERMEABILI' in t,                                                           'IMPERMEABILIZACAO'),
-    (lambda t: 'MONITORAMENTO' in t,                                                           'MONITORAMENTO'),
-    (lambda t: 'PINTURA' in t and 'FUNDO' not in t and 'FACHADA' not in t,                   'PINTURA'),
-    (lambda t: 'RESCIS' in t and 'FUNC' in t,                                                 'RECISAO FUNCIONARIO'),
-]
-
 def _safe_search(pattern, text, group=1, flags=re.IGNORECASE | re.MULTILINE):
     m = re.search(pattern, text, flags)
     return m.group(group).strip() if m else None
@@ -197,10 +159,15 @@ def _extrair_taxas_layout_novo(texto: str) -> list:
     Cada linha tem: NOME_TAXA [parcela] valor
     O GÁS ocupa uma linha inteira com a descrição de leitura.
     """
+    
+    
     inicio = re.search(r'Demonstrativo da cobran', texto, re.IGNORECASE)
-    fim    = re.search(r'Total\s+até\s+o\s+vencimento', texto, re.IGNORECASE)
+    fim = re.search(r'Total\s+até\s+o\s+vencimento', texto, re.IGNORECASE)
+    if not fim:
+        fim = re.search(r'Valor\s+do\s+desconto\s+até\s+o\s+vencimento', texto, re.IGNORECASE)
     if not inicio or not fim:
         return []
+
 
     bloco  = texto[inicio.end():fim.start()]
     linhas = [l.strip() for l in bloco.split('\n') if l.strip()]
@@ -287,7 +254,7 @@ def _extrair_campos_layout_novo(texto: str) -> dict:
     nome_cond   = _safe_search(
         r'Cond[oô]mino\s*:\s*(.+?)(?:\s+\d{2}/\d{2}/\d{4})?\s*$',
         texto, flags=re.IGNORECASE | re.MULTILINE)
-    complemento = _safe_search(r'Unidade\s*:?\s*([a-zA-Z0-9 ]+?)\s*\W*CPF', texto)
+    complemento = _safe_search( r'Unidade\s*[:\-]?\s*([A-Za-z0-9 ]+?)\s*Compet\.', texto)
     competencia = _safe_search(r'Compet[êe]ncia\s*:\s*(\d{2}/\d{4})', texto) or 'extra'
     # Vencimento: tenta na linha do pagamento, depois na Unidade, depois em qualquer linha após Condômino
     vencimento  = _safe_search(r'PAGAMENTO EM[^\n]+\n(\d{2}/\d{2}/\d{4})', texto)
@@ -338,6 +305,7 @@ def extrair_boleto(caminho_pdf: Path, logger) -> Boleto:
     logger.sucesso("Extração dos Dados", f"Iniciando extração do boleto {nome_arquivo}")
 
     texto  = _extrair_texto_pdf(caminho_pdf, logger)
+    #print(texto)
     layout = _detectar_layout(texto)
     logger.sucesso("Extração dos Dados", f"Layout detectado: {layout}")
 
