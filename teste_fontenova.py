@@ -8,7 +8,7 @@ class LoggerFake:
         print(f"[ERRO] {etapa} - {msg}")
 
 
-pdf_path = r"\\192.168.150.12\dados\CREDITO REAL\SETORES\CONTABILIDADE FISCAL\SETOR\Condomínios\Novas Locações\TAXA 120\PROCESSADOS\Boletos Fonte Nova - 10_06_2026_pagina_22.pdf"
+pdf_path = r"C:\Users\jordana.metzler\Downloads\Boletos Fonte Nova - 05_06_2026_pagina_10.pdf"
 
 logger = LoggerFake()
 

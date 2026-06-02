@@ -44,7 +44,8 @@ _NORMALIZACOES_TAXA = [
     (lambda t: ('FERIAS' in t or 'SALARIO' in t or 'SAL.' in t) and
                ('13' in t or 'FUNCIONARIO' in t or 'FUNC' in t),                              'FERIAS/13 SAL'),
     (lambda t: 'ENERGIA' in t or ('CONSUMO' in t and 'ENERGIA' in t),                         'ENERGIA ELETRICA'),
-    (lambda t: 'COTA' in t and 'ALA' in t,                                                    'CONDOMINIO'),
+    (lambda t: 'COTA' in t and 'ALA' in t and 'GERAL' not in t,                                'CONDOMINIO'),
+    (lambda t: 'COTA' in t and 'GERAL',                                                          'COTA ALA GERAL'),
     (lambda t: 'PORTARIA' in t,                                                                'PORTARIA'),
     (lambda t: 'AGUA' in t and 'PURIFICADOR' not in t,                                        'AGUA'),
     (lambda t: 'AGUA' in t and 'M' in t,                                                       'AGUA M³'),
@@ -52,7 +53,8 @@ _NORMALIZACOES_TAXA = [
     (lambda t: 'FUNDO' in t and any(x in t for x in 
     ('MELHORIAS', 'LAZER', 'JANELA', 'ELETRIC')),                                              'FUNDO MELHORIAS'),
     (lambda t: 'OBRA' in t and 'FUNDO' not in t,                                              'OBRAS'),
-    (lambda t: 'FUNDO' in t and 'RESERVA' in t,                                               'FUNDO RESERVA'),
+    (lambda t: 'RESERVA' in t and 'GERAL' in t,                                               'FUNDO RESERVA GERAL'),
+    (lambda t: 'FUNDO' in t and 'RESERVA' in t and 'GERAL' not in t,                          'FUNDO RESERVA'),
     (lambda t: 'FDO.' in t and 'RESERVA' in t,                                               'FUNDO RESERVA'),
     (lambda t: 'FDO.' in t and 'LAZER' in t,                                               'FUNDO MELHORIAS'),
     (lambda t: 'PURIFICATTA' in t,                                                              'PURIFICATTA'),

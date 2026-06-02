@@ -22,12 +22,15 @@ from pathlib import Path
 import pdfplumber
 import pytesseract
 
-from imobiliarias.fontenova.normalizar_taxas import _NORMALIZACOES_TAXA
+from app.imobiliarias.fontenova.normalizar_taxas import _NORMALIZACOES_TAXA
+
 pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
 from app.classes.boleto import Boleto
 from app.imobiliarias.fontenova.config import PASTA_PROCESSADOS
 from app.utils.formatarCodigoBarras import extrai_valor_codigo_barras, extrai_vencimento, linha_digitavel_para_codigo_barras
+
+
 
 # ---------------------------------------------------------------------------
 # Normalização de nomes de taxas
@@ -286,7 +289,7 @@ def _extrair_texto_pdf(caminho: Path, logger) -> str:
         paginas_ocr = []
         for page in pdf.pages:
             pil_img = page.to_image(resolution=200).original
-            paginas_ocr.append(pytesseract.image_to_string(pil_img, lang='por'))
+            paginas_ocr.append(pytesseract.image_to_string(pil_img, lang='por', config="--psm 6"))
         return "\n".join(paginas_ocr)
 
 

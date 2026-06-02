@@ -229,43 +229,6 @@ def _processar_boleto(boleto, cursor, tabela_taxas, session_id,
     taxas_boleto[0]["valor"] = valor_total
     nomes = [t.get("taxa", "").lower() for t in taxas_boleto]
 
-    # if any("multa" in n for n in nomes):
-    #     logger.alerta("Lançamento", f"{boleto.nome_boleto} contém multa. Revisão manual.")
-    #     relatorio.registrar(
-    #         cod_imovel=cod_imovel,
-    #         numero_taxa="",
-    #         descricao_taxa="Multa",
-    #         valor="",
-    #         status="Alerta",
-    #         mensagem=f"Revisão manual: encontrada multa em {boleto.nome_boleto}.",
-    #     )
-    #     return
-
-    # if any("laudo pericial" in n for n in nomes):
-    #     logger.alerta("Lançamento", f"{boleto.nome_boleto} contém LAUDO - PERICIAL. Revisão manual.")
-    #     relatorio.registrar(
-    #         cod_imovel=cod_imovel,
-    #         numero_taxa="",
-    #         descricao_taxa="LAUDO - PERICIAL",
-    #         valor="",
-    #         status="Alerta",
-    #         mensagem=f"Revisão manual: encontrado laudo pericial em {boleto.nome_boleto}.",
-    #     )
-    #     return
-
-    # if any("desconto" in n for n in nomes):
-    #     for desc in [t for t in taxas_boleto if "desconto" in t.get("taxa", "").lower()]:
-    #         logger.alerta("Lançamento", f"{boleto.nome_boleto} contém taxa de desconto. Revisão manual.")
-    #         relatorio.registrar(
-    #             cod_imovel=cod_imovel,
-    #             numero_taxa="",
-    #             descricao_taxa=desc.get("taxa", ""),
-    #             valor=desc.get("valor", ""),
-    #             status="Alerta",
-    #             mensagem=f"Revisão manual: encontrado desconto em {boleto.nome_boleto}.",
-    #         )
-    #     return
-
     # Consulta contrato do imóvel
     resp_contrato = requests.post(URL, json={
         "Header": {"SessionId": session_id, "Action": "LOCACAO_CONTRATO_IMOVEL_CONSULTAR"},
